@@ -5,6 +5,7 @@ package oggwriter
 
 import (
 	"bytes"
+	"encoding/binary"
 	"io"
 	"testing"
 
@@ -160,6 +161,107 @@ func TestOggWriter_LargePayload(t *testing.T) {
 	err = writer.WriteRTP(validPacket)
 	assert.NoError(t, err)
 
-	data := writer.createPage(rawPkt, pageHeaderTypeContinuationOfStream, 0, 1)
+	data := writer.createPage(rawPkt, pageHeaderTypeNone, 0, 1)
 	assert.Equal(t, uint8(4), data[26])
+}
+
+func TestOggWriter_VeryLargePayload(t *testing.T) {
+	// Create a payload larger than 65025 bytes (255 * 255)
+	// Let's use 66000 bytes.
+	// 66000 / 255 = 258 remainder 210.
+	// Page 1: 255 segments, 255 bytes each. Total 65025 bytes.
+	// Remaining: 66000 - 65025 = 975 bytes.
+	// Page 2: 975 / 255 = 3 remainder 210.
+	// Segments: 255, 255, 255, 210. Total 4 segments.
+
+	rawPkt := bytes.Repeat([]byte{0x45}, 66000)
+
+	validPacket := &rtp.Packet{
+		Header: rtp.Header{
+			Marker:           true,
+			Extension:        true,
+			ExtensionProfile: 1,
+			Version:          2,
+			PayloadType:      111,
+			SequenceNumber:   27023,
+			Timestamp:        3653407706,
+			SSRC:             476325762,
+			CSRC:             []uint32{},
+		},
+		Payload: rawPkt,
+	}
+
+	buffer := &bytes.Buffer{}
+	writer, err := NewWith(buffer, 48000, 2)
+	assert.NoError(t, err)
+	assert.NotNil(t, writer)
+
+	err = writer.WriteRTP(validPacket)
+	assert.NoError(t, err)
+
+	data := buffer.Bytes()
+
+	// Skip ID and Comment headers
+	// ID Header: 19 payload + 27 header + 1 segment = 47 bytes.
+	// Comment Header: 21 payload + 27 header + 1 segment = 49 bytes.
+	offset := 47 + 49
+
+	// Page 1 (Start of packet)
+	if offset >= len(data) {
+		t.Fatal("Page 1 missing")
+	}
+	// Check header type
+	// offset + 5 is header type.
+	// Should be 0 (pageHeaderTypeNone)
+	if data[offset+5] != 0 {
+		t.Errorf("Page 1 header type expected 0, got %d", data[offset+5])
+	}
+	// Check nSegments
+	nSegments := int(data[offset+26])
+	if nSegments != 255 {
+		t.Errorf("Page 1 segments expected 255, got %d", nSegments)
+	}
+	// Check granulePos (offset 6, 8 bytes). Should be -1.
+	granulePos := binary.LittleEndian.Uint64(data[offset+6 : offset+14])
+	if granulePos != 0xFFFFFFFFFFFFFFFF {
+		t.Errorf("Page 1 granulePos expected -1, got %d", granulePos)
+	}
+
+	// Calculate page length
+	pageHeaderLen := 27 + nSegments
+	payloadLen := 0
+	for i := 0; i < nSegments; i++ {
+		payloadLen += int(data[offset+27+i])
+	}
+	if payloadLen != 65025 {
+		t.Errorf("Page 1 payload length expected 65025, got %d", payloadLen)
+	}
+	offset += pageHeaderLen + payloadLen
+
+	// Page 2 (Continuation)
+	if offset >= len(data) {
+		t.Fatal("Page 2 missing")
+	}
+	// Check header type
+	// Should be 1 (pageHeaderTypeContinuation)
+	if data[offset+5] != 1 {
+		t.Errorf("Page 2 header type expected 1, got %d", data[offset+5])
+	}
+	// Check nSegments
+	nSegments = int(data[offset+26])
+	// 975 / 255 = 3 remainder 210. So 4 segments.
+	if nSegments != 4 {
+		t.Errorf("Page 2 segments expected 4, got %d", nSegments)
+	}
+	// Check granulePos. Should be valid packet timestamp + increment?
+	// previousGranulePosition started at 1.
+	// Timestamp 3653407706.
+	// It's the first packet, so increment = Timestamp - previousTimestamp (1).
+	// GranulePos = 1 + (3653407706 - 1) = 3653407706.
+	// But for the first packet, previousTimestamp is 1, so the condition `previousTimestamp != 1` is false.
+	// So it doesn't increment. It stays 1.
+	granulePos = binary.LittleEndian.Uint64(data[offset+6 : offset+14])
+	if granulePos != 1 {
+		t.Errorf("Page 2 granulePos expected 1, got %d", granulePos)
+	}
 }

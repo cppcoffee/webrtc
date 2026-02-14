@@ -16,7 +16,8 @@ import (
 )
 
 const (
-	pageHeaderTypeContinuationOfStream = 0x00
+	pageHeaderTypeNone                 = 0x00
+	pageHeaderTypeContinuation         = 0x01
 	pageHeaderTypeBeginningOfStream    = 0x02
 	pageHeaderTypeEndOfStream          = 0x04
 	defaultPreSkip                     = 3840 // 3840 recommended in the RFC
@@ -136,7 +137,7 @@ func (i *OggWriter) writeHeaders() error {
 	binary.LittleEndian.PutUint32(oggCommentHeader[17:], 0) // User Comment List Length
 
 	// RFC specifies that the page where the CommentHeader completes should have a granule position of 0
-	data = i.createPage(oggCommentHeader, pageHeaderTypeContinuationOfStream, 0, i.pageIndex)
+	data = i.createPage(oggCommentHeader, pageHeaderTypeNone, 0, i.pageIndex)
 	if err := i.writeToStream(data); err != nil {
 		return err
 	}
@@ -152,6 +153,12 @@ const (
 func (i *OggWriter) createPage(payload []uint8, headerType uint8, granulePos uint64, pageIndex uint32) []byte {
 	i.lastPayloadSize = len(payload)
 	nSegments := (len(payload) / 255) + 1 // A segment can be at most 255 bytes long.
+
+	// Special case: if 65025 bytes, nSegments is 256. We want 255 segments of 255.
+	// This implies continuation.
+	if nSegments > 255 {
+		nSegments = 255
+	}
 
 	page := make([]byte, pageHeaderSize+i.lastPayloadSize+nSegments)
 
@@ -170,7 +177,11 @@ func (i *OggWriter) createPage(payload []uint8, headerType uint8, granulePos uin
 		page[pageHeaderSize+i] = 255
 	}
 	// The last value will be the remainder.
-	page[pageHeaderSize+nSegments-1] = uint8(len(payload) % 255) //nolint:gosec // G115
+	lastVal := uint8(len(payload) % 255) //nolint:gosec // G115
+	if nSegments == 255 && lastVal == 0 && len(payload) > 0 {
+		lastVal = 255
+	}
+	page[pageHeaderSize+nSegments-1] = lastVal
 
 	copy(page[pageHeaderSize+nSegments:], payload) // Payload goes after the segment table, so at pageHeaderSize+nSegments.
 
@@ -209,10 +220,42 @@ func (i *OggWriter) WriteRTP(packet *rtp.Packet) error {
 	}
 	i.previousTimestamp = packet.Timestamp
 
-	data := i.createPage(payload, pageHeaderTypeContinuationOfStream, i.previousGranulePosition, i.pageIndex)
-	i.pageIndex++
+	firstPage := true
+	for {
+		chunkSize := len(payload)
+		if chunkSize > 65025 {
+			chunkSize = 65025
+		}
 
-	return i.writeToStream(data)
+		chunk := payload[:chunkSize]
+		payload = payload[chunkSize:]
+
+		headerType := uint8(pageHeaderTypeNone)
+		if !firstPage {
+			headerType = pageHeaderTypeContinuation
+		}
+
+		pageGranulePos := i.previousGranulePosition
+		if len(payload) > 0 {
+			pageGranulePos = 0xFFFFFFFFFFFFFFFF
+		}
+
+		data := i.createPage(chunk, headerType, pageGranulePos, i.pageIndex)
+		if err := i.writeToStream(data); err != nil {
+			return err
+		}
+		i.pageIndex++
+		firstPage = false
+
+		if len(payload) == 0 {
+			if chunkSize == 65025 {
+				continue
+			}
+			break
+		}
+	}
+
+	return nil
 }
 
 // Close stops the recording.
@@ -234,17 +277,25 @@ func (i *OggWriter) Close() error {
 	}
 
 	// Seek back one page, we need to update the header and generate new CRC
-	pageOffset, err := i.fd.Seek(-1*int64(i.lastPayloadSize+pageHeaderSize+1), 2)
+	nSegments := (i.lastPayloadSize / 255) + 1
+	pageOffset, err := i.fd.Seek(-1*int64(i.lastPayloadSize+pageHeaderSize+nSegments), 2)
 	if err != nil {
 		return err
 	}
 
+	// Read the header to preserve existing flags (like Continuation)
+	header := make([]byte, pageHeaderSize)
+	if _, err := i.fd.ReadAt(header, pageOffset); err != nil {
+		return err
+	}
+	originalHeaderType := header[5]
+
 	payload := make([]byte, i.lastPayloadSize)
-	if _, err := i.fd.ReadAt(payload, pageOffset+pageHeaderSize+1); err != nil {
+	if _, err := i.fd.ReadAt(payload, pageOffset+int64(pageHeaderSize+nSegments)); err != nil {
 		return err
 	}
 
-	data := i.createPage(payload, pageHeaderTypeEndOfStream, i.previousGranulePosition, i.pageIndex-1)
+	data := i.createPage(payload, pageHeaderTypeEndOfStream|originalHeaderType, i.previousGranulePosition, i.pageIndex-1)
 	if err := i.writeToStream(data); err != nil {
 		return err
 	}
