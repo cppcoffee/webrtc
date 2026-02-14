@@ -31,13 +31,21 @@ type Config struct {
 	LoggerFactory logging.LoggerFactory
 }
 
+type endpointEntry struct {
+	endpoint  *Endpoint
+	matchFunc MatchFunc
+}
+
 // Mux allows multiplexing.
 type Mux struct {
-	nextConn   net.Conn
-	bufferSize int
-	lock       sync.Mutex
-	endpoints  map[*Endpoint]MatchFunc
-	isClosed   bool
+	nextConn       net.Conn
+	bufferSize     int
+	lock           sync.Mutex
+	endpoints map[*Endpoint]MatchFunc
+	// endpointsSlice is a slice of endpoints used for faster iteration in dispatch.
+	// It is kept in sync with the endpoints map.
+	endpointsSlice []endpointEntry
+	isClosed       bool
 
 	pendingPackets [][]byte
 
@@ -72,6 +80,7 @@ func (m *Mux) NewEndpoint(matchFunc MatchFunc) *Endpoint {
 
 	m.lock.Lock()
 	m.endpoints[endpoint] = matchFunc
+	m.endpointsSlice = append(m.endpointsSlice, endpointEntry{endpoint: endpoint, matchFunc: matchFunc})
 	m.lock.Unlock()
 
 	go m.handlePendingPackets(endpoint, matchFunc)
@@ -84,6 +93,14 @@ func (m *Mux) RemoveEndpoint(e *Endpoint) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 	delete(m.endpoints, e)
+
+	newSlice := make([]endpointEntry, 0, len(m.endpoints))
+	for _, ee := range m.endpointsSlice {
+		if ee.endpoint != e {
+			newSlice = append(newSlice, ee)
+		}
+	}
+	m.endpointsSlice = newSlice
 }
 
 // Close closes the Mux and all associated Endpoints.
@@ -155,9 +172,9 @@ func (m *Mux) dispatch(buf []byte) error {
 	var endpoint *Endpoint
 
 	m.lock.Lock()
-	for e, f := range m.endpoints {
-		if f(buf) {
-			endpoint = e
+	for _, ee := range m.endpointsSlice {
+		if ee.matchFunc(buf) {
+			endpoint = ee.endpoint
 
 			break
 		}
