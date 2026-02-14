@@ -12,7 +12,6 @@ import (
 
 	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
-
 	"github.com/pion/webrtc/v4/internal/util"
 )
 
