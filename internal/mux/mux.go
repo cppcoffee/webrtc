@@ -41,7 +41,7 @@ type Mux struct {
 	nextConn       net.Conn
 	bufferSize     int
 	lock           sync.Mutex
-	endpoints map[*Endpoint]MatchFunc
+	endpoints      map[*Endpoint]MatchFunc
 	// endpointsSlice is a slice of endpoints used for faster iteration in dispatch.
 	// It is kept in sync with the endpoints map.
 	endpointsSlice []endpointEntry
