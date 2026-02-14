@@ -38,10 +38,10 @@ type endpointEntry struct {
 
 // Mux allows multiplexing.
 type Mux struct {
-	nextConn       net.Conn
-	bufferSize     int
-	lock           sync.Mutex
-	endpoints      map[*Endpoint]MatchFunc
+	nextConn   net.Conn
+	bufferSize int
+	lock       sync.Mutex
+	endpoints  map[*Endpoint]MatchFunc
 	// endpointsSlice is a slice of endpoints used for faster iteration in dispatch.
 	// It is kept in sync with the endpoints map.
 	endpointsSlice []endpointEntry
