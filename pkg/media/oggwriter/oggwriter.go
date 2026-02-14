@@ -12,6 +12,7 @@ import (
 
 	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
+
 	"github.com/pion/webrtc/v4/internal/util"
 )
 
@@ -230,30 +231,40 @@ func (i *OggWriter) WriteRTP(packet *rtp.Packet) error {
 		chunk := payload[:chunkSize]
 		payload = payload[chunkSize:]
 
-		headerType := uint8(pageHeaderTypeNone)
-		if !firstPage {
-			headerType = pageHeaderTypeContinuation
-		}
-
-		pageGranulePos := i.previousGranulePosition
-		if len(payload) > 0 {
-			pageGranulePos = 0xFFFFFFFFFFFFFFFF
-		}
-
-		data := i.createPage(chunk, headerType, pageGranulePos, i.pageIndex)
-		if err := i.writeToStream(data); err != nil {
+		if err := i.writePage(chunk, firstPage, len(payload) > 0); err != nil {
 			return err
 		}
-		i.pageIndex++
+
 		firstPage = false
 
 		if len(payload) == 0 {
 			if chunkSize == 65025 {
 				continue
 			}
+
 			break
 		}
 	}
+
+	return nil
+}
+
+func (i *OggWriter) writePage(chunk []byte, firstPage, hasMore bool) error {
+	headerType := uint8(pageHeaderTypeNone)
+	if !firstPage {
+		headerType = pageHeaderTypeContinuation
+	}
+
+	pageGranulePos := i.previousGranulePosition
+	if hasMore {
+		pageGranulePos = 0xFFFFFFFFFFFFFFFF
+	}
+
+	data := i.createPage(chunk, headerType, pageGranulePos, i.pageIndex)
+	if err := i.writeToStream(data); err != nil {
+		return err
+	}
+	i.pageIndex++
 
 	return nil
 }

@@ -207,25 +207,18 @@ func TestOggWriter_VeryLargePayload(t *testing.T) {
 	offset := 47 + 49
 
 	// Page 1 (Start of packet)
-	if offset >= len(data) {
-		t.Fatal("Page 1 missing")
-	}
-	// Check header type
-	// offset + 5 is header type.
-	// Should be 0 (pageHeaderTypeNone)
-	if data[offset+5] != 0 {
-		t.Errorf("Page 1 header type expected 0, got %d", data[offset+5])
-	}
+	assert.Less(t, offset, len(data), "Page 1 missing")
+
+	// Check header type (should be 0 - pageHeaderTypeNone)
+	assert.Equal(t, uint8(0), data[offset+5], "Page 1 header type")
+
 	// Check nSegments
 	nSegments := int(data[offset+26])
-	if nSegments != 255 {
-		t.Errorf("Page 1 segments expected 255, got %d", nSegments)
-	}
+	assert.Equal(t, 255, nSegments, "Page 1 segments")
+
 	// Check granulePos (offset 6, 8 bytes). Should be -1.
 	granulePos := binary.LittleEndian.Uint64(data[offset+6 : offset+14])
-	if granulePos != 0xFFFFFFFFFFFFFFFF {
-		t.Errorf("Page 1 granulePos expected -1, got %d", granulePos)
-	}
+	assert.Equal(t, uint64(0xFFFFFFFFFFFFFFFF), granulePos, "Page 1 granulePos")
 
 	// Calculate page length
 	pageHeaderLen := 27 + nSegments
@@ -233,35 +226,21 @@ func TestOggWriter_VeryLargePayload(t *testing.T) {
 	for i := 0; i < nSegments; i++ {
 		payloadLen += int(data[offset+27+i])
 	}
-	if payloadLen != 65025 {
-		t.Errorf("Page 1 payload length expected 65025, got %d", payloadLen)
-	}
+	assert.Equal(t, 65025, payloadLen, "Page 1 payload length")
 	offset += pageHeaderLen + payloadLen
 
 	// Page 2 (Continuation)
-	if offset >= len(data) {
-		t.Fatal("Page 2 missing")
-	}
-	// Check header type
-	// Should be 1 (pageHeaderTypeContinuation)
-	if data[offset+5] != 1 {
-		t.Errorf("Page 2 header type expected 1, got %d", data[offset+5])
-	}
+	assert.Less(t, offset, len(data), "Page 2 missing")
+
+	// Check header type (should be 1 - pageHeaderTypeContinuation)
+	assert.Equal(t, uint8(1), data[offset+5], "Page 2 header type")
+
 	// Check nSegments
 	nSegments = int(data[offset+26])
 	// 975 / 255 = 3 remainder 210. So 4 segments.
-	if nSegments != 4 {
-		t.Errorf("Page 2 segments expected 4, got %d", nSegments)
-	}
-	// Check granulePos. Should be valid packet timestamp + increment?
-	// previousGranulePosition started at 1.
-	// Timestamp 3653407706.
-	// It's the first packet, so increment = Timestamp - previousTimestamp (1).
-	// GranulePos = 1 + (3653407706 - 1) = 3653407706.
-	// But for the first packet, previousTimestamp is 1, so the condition `previousTimestamp != 1` is false.
-	// So it doesn't increment. It stays 1.
+	assert.Equal(t, 4, nSegments, "Page 2 segments")
+
+	// Check granulePos
 	granulePos = binary.LittleEndian.Uint64(data[offset+6 : offset+14])
-	if granulePos != 1 {
-		t.Errorf("Page 2 granulePos expected 1, got %d", granulePos)
-	}
+	assert.Equal(t, uint64(1), granulePos, "Page 2 granulePos")
 }
