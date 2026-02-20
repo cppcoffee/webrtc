@@ -96,6 +96,7 @@ func (m *Mux) RemoveEndpoint(e *Endpoint) {
 	for i, entry := range m.endpointsSlice {
 		if entry.endpoint == e {
 			m.endpointsSlice = append(m.endpointsSlice[:i], m.endpointsSlice[i+1:]...)
+
 			return
 		}
 	}
